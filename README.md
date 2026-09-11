@@ -42,12 +42,27 @@ likely to change:
 |---|---|
 | `OPENROUTER_API_KEY` | **Required.** HolmesGPT's LLM backend. |
 | `HOLMES_MODEL` | LiteLLM model string, e.g. `openrouter/anthropic/claude-sonnet-4.5`. |
-| `GITHUB_PAT` | Enables the GitHub MCP integration. Omit to skip it. |
+| `GITHUB_PAT` | Enables the GitHub MCP integration, and pulls a private `ghcr.io` frontend (needs `read:packages`). Omit to skip both. |
 | `FRONTEND_IMAGE_REPO` / `FRONTEND_IMAGE_TAG` | The frontend image (see below). |
 | `MINIKUBE_CPUS` / `MINIKUBE_MEMORY` | Cluster sizing. Defaults: 6 CPU / 12 GB. |
 
 Chart versions and in-cluster URLs live in `lib/versions.sh`. Per-component
 Helm values live in `values/` and are yours to edit.
+
+### Where the secrets go
+
+`.env` is the only place a credential is typed. The setup scripts turn it into
+Kubernetes Secrets, each in the namespace of the thing that uses it:
+
+| `.env` variable | Secret | Namespace | Consumer |
+|---|---|---|---|
+| `OPENROUTER_API_KEY` | `holmes-llm-keys` | `holmesgpt` | HolmesGPT LLM backend (step 70) |
+| `GITHUB_PAT` | `github-mcp-token` | `holmesgpt` | HolmesGPT GitHub MCP server (step 70) |
+| `GITHUB_PAT` + `GITHUB_USER` | `ghcr-pull` (docker-registry) | `microservices-demo` | frontend `imagePullSecret`, only when the image is on `ghcr.io` (step 60) |
+| *(minted)* | `grafana-api-key` | `holmesgpt` | HolmesGPT Grafana toolset (step 70) |
+
+Re-running a step re-applies its secrets, so rotating a key is: edit `.env`,
+`./setup.sh --only 70` (or `--only 60` for the pull secret).
 
 ---
 
@@ -74,8 +89,11 @@ FRONTEND_IMAGE_REPO=ghcr.io/ludvigsegerholmop/frontend FRONTEND_IMAGE_TAG=latest
 ./setup.sh --only 60
 ```
 
-The node must be able to pull the image anonymously (a private GHCR package
-fails with `unauthorized`; make the package public or add an imagePullSecret).
+A private `ghcr.io` package is fine: when `FRONTEND_IMAGE_REPO` is on
+`ghcr.io` and `GITHUB_PAT` is set, step 60 creates the docker-registry secret
+`microservices-demo/ghcr-pull` from it and the post-renderer attaches it as an
+`imagePullSecret` on the frontend Deployment only. Without a PAT the package
+must be public, or the pull fails with `unauthorized`.
 On Apple Silicon a multi-arch image runs natively while the stock amd64-only
 services run under emulation.
 
@@ -93,7 +111,8 @@ repoint *all eleven* services. Patching the Deployment afterwards with
 
 So `manifests/helm-plugins/ob-frontend-image/post-render.sh` pipes Helm's rendered output through
 kustomize's image transformer, which matches on image *name* and therefore
-rewrites the frontend and nothing else. `scripts/60-online-boutique.sh` asserts
+rewrites the frontend and nothing else (and, for a private registry, adds the
+`imagePullSecret` with a strategic-merge patch on the same Deployment). `scripts/60-online-boutique.sh` asserts
 this afterwards: the frontend must equal your image, and `cartservice` must
 still be on the upstream one.
 
@@ -153,7 +172,7 @@ scripts/40-victoria-logs  VictoriaLogs + Vector + Grafana datasource
 scripts/50-linkerd-observability  scrape configs, dashboards, linkerd-viz
 scripts/60-online-boutique   the demo app, frontend image swapped, load profile mounted
 scripts/65-online-boutique-observability  ServiceProfiles + release impact dashboard
-scripts/70-holmesgpt      secrets, Grafana SA token, Holmes
+scripts/70-holmesgpt      secrets (namespace holmesgpt), Grafana SA token, Holmes
 scripts/99-verify         live end-to-end checks
 values/                   Helm values, hand-editable
 manifests/helm-plugins/   the Helm post-renderer (image swap, probes, load profile)
@@ -182,7 +201,7 @@ minikube -p $P service -n microservices-demo frontend-external
 linkerd viz dashboard --context $P
 
 # HolmesGPT API
-kubectl --context $P -n holmes port-forward svc/holmes-holmes 5050:80
+kubectl --context $P -n holmesgpt port-forward svc/holmes-holmes 5050:80
 ```
 
 Ask HolmesGPT something:
@@ -266,6 +285,6 @@ Check `kubectl -n monitoring logs deploy/vm-grafana -c grafana`.
 
 **A Holmes toolset reports an error.** `scripts/99-verify.sh` prints each
 toolset's self-reported status. For detail:
-`kubectl -n holmes logs deploy/holmes-holmes`.
+`kubectl -n holmesgpt logs deploy/holmes-holmes`.
 
 **Re-run a single step.** `./setup.sh --only 50`, or `--from 30` to resume.

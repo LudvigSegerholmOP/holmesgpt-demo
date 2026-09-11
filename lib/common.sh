@@ -79,6 +79,14 @@ load_env() {
   : "${FRONTEND_IMAGE_REPO:=${OB_UPSTREAM_IMAGE_REPO}/frontend}"
   : "${FRONTEND_IMAGE_TAG:=v${VER_ONLINE_BOUTIQUE#v}}"
 
+  # Username for the ghcr.io pull secret. GHCR only checks the token, but the
+  # package owner is the natural default: ghcr.io/<owner>/<image> -> <owner>.
+  if [[ -z "${GITHUB_USER:-}" && "${FRONTEND_IMAGE_REPO}" == ghcr.io/* ]]; then
+    GITHUB_USER="${FRONTEND_IMAGE_REPO#ghcr.io/}"
+    GITHUB_USER="${GITHUB_USER%%/*}"
+  fi
+  : "${GITHUB_USER:=}"
+
   # Load generator: simulated users and spawn rate (users/second). The upstream
   # chart hardcodes 10 and 1; see manifests/online-boutique/locustfile.py.
   : "${LOADGEN_USERS:=20}"
@@ -86,7 +94,7 @@ load_env() {
 
   export MINIKUBE_PROFILE MINIKUBE_DRIVER MINIKUBE_CPUS MINIKUBE_MEMORY MINIKUBE_DISK K8S_VERSION
   export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
-  export HOLMES_MODEL OPENROUTER_API_KEY GITHUB_PAT
+  export HOLMES_MODEL OPENROUTER_API_KEY GITHUB_PAT GITHUB_USER
   export FRONTEND_IMAGE_REPO FRONTEND_IMAGE_TAG
   export LOADGEN_USERS LOADGEN_RATE
 

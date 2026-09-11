@@ -21,6 +21,28 @@ inject=$(k get namespace "${NS_DEMO}" -o jsonpath='{.metadata.annotations.linker
   || die "namespace ${NS_DEMO} is not annotated linkerd.io/inject=enabled (run scripts/10-cluster.sh)"
 
 # ---------------------------------------------------------------------------
+# Private GHCR frontend. The node cannot pull a private ghcr.io package
+# anonymously, so build a docker-registry secret from GITHUB_PAT (needs the
+# read:packages scope) and have the post-renderer attach it to the frontend
+# Deployment only. Anything not on ghcr.io is assumed public.
+# ---------------------------------------------------------------------------
+OB_FRONTEND_PULL_SECRET=""
+if [[ "${FRONTEND_IMAGE_REPO}" == ghcr.io/* ]]; then
+  if [[ -n "${GITHUB_PAT}" ]]; then
+    k -n "${NS_DEMO}" create secret docker-registry "${OB_PULL_SECRET}" \
+      --docker-server=ghcr.io \
+      --docker-username="${GITHUB_USER}" \
+      --docker-password="${GITHUB_PAT}" \
+      --dry-run=client -o yaml | k apply -f - >/dev/null
+    OB_FRONTEND_PULL_SECRET="${OB_PULL_SECRET}"
+    ok "imagePullSecret ${NS_DEMO}/${OB_PULL_SECRET} (ghcr.io as ${GITHUB_USER})"
+  else
+    warn "GITHUB_PAT unset: ${FRONTEND_IMAGE_REPO} must be pullable anonymously"
+  fi
+fi
+export OB_FRONTEND_PULL_SECRET
+
+# ---------------------------------------------------------------------------
 # Load profile. The locustfile is shipped as a ConfigMap and mounted over the
 # image's built-in one by the post-renderer, which also sets USERS/RATE. The
 # file's hash goes on the pod template so an edited profile rolls the pod.
@@ -97,6 +119,14 @@ fi
 other=$(k -n "${NS_DEMO}" get deployment cartservice \
   -o jsonpath='{.spec.template.spec.containers[0].image}')
 ok "cartservice image untouched = ${other}"
+
+if [[ -n "${OB_FRONTEND_PULL_SECRET}" ]]; then
+  pull_secret=$(k -n "${NS_DEMO}" get deployment frontend \
+    -o jsonpath='{.spec.template.spec.imagePullSecrets[*].name}')
+  [[ " ${pull_secret} " == *" ${OB_FRONTEND_PULL_SECRET} "* ]] \
+    || die "frontend is missing imagePullSecret ${OB_FRONTEND_PULL_SECRET} (got: ${pull_secret:-none})"
+  ok "frontend pulls with imagePullSecret ${OB_FRONTEND_PULL_SECRET}"
+fi
 
 lg_users=$(k -n "${NS_DEMO}" get deployment loadgenerator \
   -o jsonpath='{.spec.template.spec.containers[?(@.name=="main")].env[?(@.name=="USERS")].value}')

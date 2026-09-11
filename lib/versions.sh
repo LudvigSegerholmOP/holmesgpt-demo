@@ -50,7 +50,7 @@ readonly NS_MONITORING="monitoring"
 readonly NS_LINKERD="linkerd"
 readonly NS_LINKERD_VIZ="linkerd-viz"
 readonly NS_DEMO="microservices-demo"
-readonly NS_HOLMES="holmes"
+readonly NS_HOLMES="holmesgpt"
 
 # ---------------------------------------------------------------------------
 # Helm release names
@@ -81,6 +81,8 @@ readonly GRAFANA_VL_DATASOURCE="VictoriaLogs"
 
 # Online Boutique extras published by scripts/60 and scripts/65.
 readonly OB_LOADGEN_CONFIGMAP="loadgenerator-locustfile"
+# imagePullSecret for a private ghcr.io frontend, built from GITHUB_PAT.
+readonly OB_PULL_SECRET="ghcr-pull"
 readonly OB_DASHBOARD_UID="ob-frontend-release-impact"
 readonly OB_DASHBOARD_FOLDER="Online Boutique"
 

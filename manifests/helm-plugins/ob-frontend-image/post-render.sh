@@ -21,6 +21,9 @@
 #                           emulation; loosens every Deployment's probes so
 #                           the slow-starting services are not killed by the
 #                           chart's 1-second health checks (relax-probes.py)
+#   OB_FRONTEND_PULL_SECRET optional. Name of a docker-registry Secret (in the
+#                           release namespace) added as an imagePullSecret on
+#                           the frontend Deployment, for a private registry.
 #   OB_LOADGEN_CONFIGMAP    optional. Name of a ConfigMap (in the release
 #                           namespace) holding locustfile.py; when set, the
 #                           loadgenerator Deployment is patched to mount it
@@ -50,6 +53,25 @@ images:
     newName: ${FRONTEND_IMAGE_REPO}
     newTag: ${FRONTEND_IMAGE_TAG}
 EOF
+
+# Strategic-merge patches, as "<file> <deployment name>" pairs.
+patches=()
+
+# Optional: private registry credentials for the frontend only.
+if [[ -n "${OB_FRONTEND_PULL_SECRET:-}" ]]; then
+  cat > "${workdir}/frontend-pull-secret-patch.yaml" <<EOF
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      imagePullSecrets:
+        - name: ${OB_FRONTEND_PULL_SECRET}
+EOF
+  patches+=("frontend-pull-secret-patch.yaml frontend")
+fi
 
 # Optional: custom load profile. A strategic-merge patch, so the env entries
 # merge by name (USERS/RATE are replaced, FRONTEND_ADDR is kept) and the
@@ -85,13 +107,20 @@ spec:
           configMap:
             name: ${OB_LOADGEN_CONFIGMAP}
 EOF
-  cat >> "${workdir}/kustomization.yaml" <<EOF
-patches:
-  - path: loadgenerator-patch.yaml
+  patches+=("loadgenerator-patch.yaml loadgenerator")
+fi
+
+if (( ${#patches[@]} )); then
+  printf 'patches:\n' >> "${workdir}/kustomization.yaml"
+  for entry in "${patches[@]}"; do
+    read -r file name <<< "${entry}"
+    cat >> "${workdir}/kustomization.yaml" <<EOF
+  - path: ${file}
     target:
       kind: Deployment
-      name: loadgenerator
+      name: ${name}
 EOF
+  done
 fi
 
 # kustomize is bundled inside kubectl.

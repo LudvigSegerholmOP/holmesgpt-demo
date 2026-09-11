@@ -47,6 +47,12 @@ fi
 log "frontend image: ${FRONTEND_IMAGE_REPO}:${FRONTEND_IMAGE_TAG}"
 if [[ "${FRONTEND_IMAGE_REPO}" == "${OB_UPSTREAM_IMAGE_REPO}/frontend" ]]; then
   dim "     (upstream default - set FRONTEND_IMAGE_REPO/_TAG in .env to use your own build)"
+elif [[ "${FRONTEND_IMAGE_REPO}" == ghcr.io/* ]]; then
+  if [[ -n "${GITHUB_PAT}" ]]; then
+    ok "ghcr.io frontend: will pull as ${GITHUB_USER} with GITHUB_PAT (needs read:packages)"
+  else
+    warn "ghcr.io frontend with GITHUB_PAT unset: the package must be public or the pull fails"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
