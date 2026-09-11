@@ -1,0 +1,92 @@
+# victoria-logs-single
+#
+# VictoriaLogs plus a Vector DaemonSet that ships every pod's stdout/stderr
+# into it. This is what backs HolmesGPT's `victorialogs` toolset and the
+# Explore view in Grafana.
+
+# Fixed Service name so the endpoint is stable and greppable:
+#   http://victorialogs.monitoring.svc.cluster.local:9428
+server:
+  fullnameOverride: victorialogs
+
+  retentionPeriod: 3d
+
+  persistentVolume:
+    enabled: true
+    size: 8Gi
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 1Gi
+
+  # Let vmagent scrape VictoriaLogs' own metrics.
+  vmServiceScrape:
+    enabled: true
+
+# ---------------------------------------------------------------------------
+# Log collection
+# ---------------------------------------------------------------------------
+vector:
+  enabled: true
+  role: Agent
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      memory: 512Mi
+
+  customConfig:
+    data_dir: /vector-data-dir
+    api:
+      enabled: false
+      address: 0.0.0.0:8686
+    sources:
+      k8s:
+        type: kubernetes_logs
+      internal_metrics:
+        type: internal_metrics
+    transforms:
+      parser:
+        type: remap
+        inputs: [k8s]
+        source: |
+          .log = parse_json(.message) ?? .message
+          del(.message)
+    sinks:
+      exporter:
+        type: prometheus_exporter
+        address: 0.0.0.0:9090
+        inputs: [internal_metrics]
+      vlogs:
+        type: elasticsearch
+        inputs: [parser]
+        mode: bulk
+        api_version: v8
+        compression: gzip
+        healthcheck:
+          enabled: false
+        request:
+          headers:
+            VL-Time-Field: timestamp
+            # Stream fields determine how logs are partitioned. Including the
+            # workload name makes "show me logs for deployment X" cheap, which
+            # is the query shape HolmesGPT generates most often.
+            VL-Stream-Fields: stream,kubernetes.pod_name,kubernetes.container_name,kubernetes.pod_namespace,kubernetes.pod_labels.app
+            VL-Msg-Field: message,msg,_msg,log.msg,log.message,log
+            AccountID: "0"
+            ProjectID: "0"
+
+# ---------------------------------------------------------------------------
+# Grafana integration
+# ---------------------------------------------------------------------------
+dashboards:
+  enabled: true
+  labels:
+    grafana_dashboard: "1"
+  annotations:
+    grafana_folder: VictoriaLogs

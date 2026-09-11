@@ -1,0 +1,37 @@
+# linkerd-viz
+#
+# The bundled Prometheus is disabled; metrics-api, tap and the web dashboard
+# all read from VictoriaMetrics instead. prometheusUrl is set by
+# scripts/50-linkerd-observability.sh so the endpoint stays defined in one place
+# (lib/versions.sh).
+
+prometheus:
+  enabled: false
+
+# Deep links from the Linkerd dashboard into our Grafana. externalUrl (rather
+# than url) avoids requiring Grafana to be served behind the viz reverse proxy.
+grafana:
+  externalUrl: http://localhost:3000/
+  uidPrefix: ""
+
+dashboard:
+  replicas: 1
+  # Demo cluster: skip the same-origin check so `kubectl port-forward` to the
+  # web pod works without extra flags.
+  enforcedHostRegexp: ".*"
+
+metricsAPI:
+  resources:
+    cpu:
+      request: 20m
+    memory:
+      request: 50Mi
+      limit: 250Mi
+
+tap:
+  resources:
+    cpu:
+      request: 20m
+    memory:
+      request: 50Mi
+      limit: 250Mi

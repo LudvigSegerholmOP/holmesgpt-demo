@@ -1,0 +1,15 @@
+# Helm v4 post-renderer plugin.
+#
+# Helm 4 removed support for passing an executable path to --post-renderer; it
+# now resolves the flag to the name of a plugin of type postrenderer/v1. This
+# plugin lives in the repo rather than in the user's ~/Library/helm/plugins, and
+# scripts/60-online-boutique.sh points HELM_PLUGINS at it for the duration of
+# one command, so nothing is installed globally.
+name: "ob-frontend-image"
+version: "1.0.0"
+type: postrenderer/v1
+apiVersion: v1
+runtime: subprocess
+runtimeConfig:
+  platformCommand:
+    - command: "${HELM_PLUGIN_DIR}/post-render.sh"

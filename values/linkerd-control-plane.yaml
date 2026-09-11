@@ -1,0 +1,40 @@
+# linkerd-control-plane
+#
+# Trust anchor and issuer certificates are NOT in this file. They are generated
+# by scripts/20-linkerd.sh into certs/ and injected with --set-file, so no
+# private key is ever committed.
+
+# Sized for a single-node minikube. The control plane is not the subject of
+# this demo, so it gets the smallest footprint that still behaves correctly.
+controllerReplicas: 1
+
+# Keep the proxy quiet enough to read, but detailed enough to be useful when
+# HolmesGPT reads proxy logs.
+proxy:
+  logLevel: warn,linkerd=info
+  resources:
+    cpu:
+      request: 20m
+    memory:
+      request: 20Mi
+      limit: 250Mi
+
+destinationResources: &small
+  cpu:
+    request: 20m
+  memory:
+    request: 50Mi
+    limit: 250Mi
+identityResources: *small
+proxyInjectorResources: *small
+
+# minikube's node runs the docker container runtime, where the proxy-init
+# iptables setup needs a real root user; `linkerd check --proxy` fails
+# otherwise (l5d-proxy-init-run-as-root). iptablesMode is set by the script.
+proxyInit:
+  runAsRoot: true
+
+# High-cardinality per-route metrics are what make the Linkerd Grafana
+# dashboards useful; leave the default (enabled) exposure on :4191/metrics.
+podAnnotations:
+  config.linkerd.io/proxy-await: "enabled"

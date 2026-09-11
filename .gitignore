@@ -1,0 +1,9 @@
+# Local secrets
+.env
+
+# Generated Linkerd mTLS material
+certs/
+
+# Run state / scratch
+.state/
+*.tgz

@@ -1,0 +1,120 @@
+# holmes (HolmesGPT)
+#
+# Endpoints, the model name and the GitHub toolset toggle are injected by
+# scripts/70-holmesgpt.sh so they stay defined once in lib/versions.sh / .env.
+
+# Holmes needs to read cluster state to investigate anything.
+#
+# Counter-intuitively this must be FALSE. In this chart `k8sRBAC: true` selects
+# caller-credential mode: it creates a ServiceAccount with
+# automountServiceAccountToken disabled, creates no ClusterRole, and the
+# toolset template force-disables kubernetes/core, kubernetes/logs and bash.
+# That mode expects a UI to pass a user token per request. For a standalone
+# in-cluster deployment we want Holmes to use its own ServiceAccount, which is
+# what `false` gives us (ClusterRole + ClusterRoleBinding, toolsets intact).
+k8sRBAC: false
+
+logLevel: INFO
+
+# Local demo cluster; do not phone home.
+enableTelemetry: false
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 1Gi
+  limits:
+    memory: 2Gi
+
+# Secrets mounted wholesale as env vars; referenced below as {{ env.<KEY> }}.
+extraEnvVarsSecrets:
+  - holmes-llm-keys
+
+additionalEnvVars:
+  - name: GRAFANA_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: grafana-api-key
+        key: api-key
+        optional: true
+
+toolsets:
+  # ---- Kubernetes ----
+  kubernetes/core:
+    enabled: true
+  kubernetes/logs:
+    # VictoriaLogs is the log source; leaving this on lets Holmes fall back to
+    # `kubectl logs` for pods whose logs have not been shipped yet.
+    enabled: true
+
+  # ---- VictoriaMetrics ----
+  # VictoriaMetrics implements the Prometheus query API, so the built-in
+  # prometheus toolset drives it. `subtype` is what makes the UI label the
+  # integration VictoriaMetrics rather than generic Prometheus.
+  #
+  # config.prometheus_url comes from the generated overlay
+  # .state/holmes-endpoints.yaml (see lib/versions.sh).
+  prometheus/metrics:
+    enabled: true
+    subtype: victoriametrics
+
+  # ---- VictoriaLogs ----
+  # config.api_url comes from the generated overlay.
+  victorialogs:
+    enabled: true
+
+  # ---- Grafana ----
+  # config.api_url comes from the generated overlay.
+  grafana/dashboards:
+    enabled: true
+    config:
+      api_key: "{{ env.GRAFANA_API_KEY }}"
+
+  # ---- General ----
+  internet:
+    enabled: true
+  bash:
+    enabled: true
+    config:
+      builtin_allowlist: "extended"
+
+  # No Robusta SaaS backend in this demo; leaving it on produces a permanently
+  # failing toolset that pollutes Holmes' self-reported health.
+  robusta:
+    enabled: false
+
+# Trim CRD RBAC down to what actually exists in this cluster.
+crdPermissions:
+  argo: false
+  flux: false
+  kafka: false
+  keda: false
+  crossplane: false
+  istio: false
+  gatewayApi: false
+  velero: false
+  externalSecrets: false
+
+# Read access to Linkerd's CRDs so Holmes can reason about mesh policy.
+customClusterRoleRules:
+  - apiGroups: ["policy.linkerd.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["linkerd.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["operator.victoriametrics.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+
+mcpAddons:
+  github:
+    # Enabled by scripts/70-holmesgpt.sh only when GITHUB_PAT is set.
+    enabled: false
+    auth:
+      secretName: github-mcp-token
+      secretKey: token
+    config:
+      toolsets: "repos,issues,pull_requests,actions,context"
+    networkPolicy:
+      enabled: false
