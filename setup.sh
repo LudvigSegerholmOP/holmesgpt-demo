@@ -18,6 +18,7 @@ STEPS=(
   40-victoria-logs
   50-linkerd-observability
   60-online-boutique
+  65-online-boutique-observability
   70-holmesgpt
   99-verify
 )

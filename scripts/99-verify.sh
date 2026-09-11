@@ -184,10 +184,31 @@ frontend_serves() {
     "http://frontend.${NS_DEMO}.svc.cluster.local:80/" 2>/dev/null | grep -q 200
 }
 
+loadgen_profile_mounted() {
+  k -n "${NS_DEMO}" get deploy loadgenerator \
+    -o jsonpath='{.spec.template.spec.containers[?(@.name=="main")].volumeMounts[?(@.name=="locustfile")].mountPath}' 2>/dev/null \
+    | grep -q '^/loadgen/locustfile.py$'
+}
+serviceprofiles_present() {
+  k -n "${NS_DEMO}" get serviceprofile \
+    "frontend.${NS_DEMO}.svc.cluster.local" \
+    "productcatalogservice.${NS_DEMO}.svc.cluster.local" >/dev/null 2>&1
+}
+release_dashboard_loaded() {
+  incluster_curl "${NS_MONITORING}" -o /dev/null -w '%{http_code}' \
+    "${URL_GRAFANA}/api/dashboards/uid/${OB_DASHBOARD_UID}" 2>/dev/null | grep -q '^200$'
+}
+
 check "frontend image matches configuration" frontend_image_ok
 check "other services still on the upstream image" other_image_untouched
 check "all workloads available" workloads_available
 check "frontend serves HTTP 200" frontend_serves
+check "load generator runs the repo load profile" loadgen_profile_mounted
+check "ServiceProfiles for frontend and productcatalogservice" serviceprofiles_present
+check "per-route metrics from the frontend proxy" promql "count(route_request_total{namespace=\"${NS_DEMO}\",deployment=\"frontend\",direction=\"inbound\"})"
+check "release-impact dashboard in Grafana" release_dashboard_loaded
+report "frontend p95" "$(promql_value "histogram_quantile(0.95, sum by (le) (rate(response_latency_ms_bucket{namespace=\"${NS_DEMO}\",deployment=\"frontend\",direction=\"inbound\"}[5m])))") ms"
+report "catalog RPCs per frontend request" "$(promql_value "sum(rate(request_total{namespace=\"${NS_DEMO}\",deployment=\"frontend\",direction=\"outbound\",dst_deployment=\"productcatalogservice\"}[5m])) / sum(rate(request_total{namespace=\"${NS_DEMO}\",deployment=\"frontend\",direction=\"inbound\"}[5m]))")"
 
 # ---------------------------------------------------------------------------
 printf '\n%sHolmesGPT%s\n' "${C_BOLD}" "${C_RESET}"
@@ -265,6 +286,7 @@ cat <<EOF
 ${C_BOLD}Access${C_RESET}
   Grafana          kubectl --context ${MINIKUBE_PROFILE} -n ${NS_MONITORING} port-forward svc/${REL_VM}-grafana 3000:80
                    http://localhost:3000  (${GRAFANA_ADMIN_USER} / ${GRAFANA_ADMIN_PASSWORD})
+                   release impact: http://localhost:3000/d/${OB_DASHBOARD_UID}
   Online Boutique  minikube -p ${MINIKUBE_PROFILE} service -n ${NS_DEMO} frontend-external
   Linkerd viz      linkerd viz dashboard --context ${MINIKUBE_PROFILE}
   VictoriaLogs     kubectl --context ${MINIKUBE_PROFILE} -n ${NS_MONITORING} port-forward svc/victorialogs 9428:9428

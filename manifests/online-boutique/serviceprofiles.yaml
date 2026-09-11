@@ -1,0 +1,79 @@
+# Linkerd ServiceProfiles for the two services the release-impact dashboard
+# breaks down by route.
+#
+# Without a profile the proxies only report per-workload totals. With one,
+# every proxy that talks to the service also reports route_request_total,
+# route_response_total and route_response_latency_ms_bucket labelled with
+# rt_route, which is what lets the dashboard show "p95 of GET /product/{id}"
+# and "GetProduct calls per second" rather than one blended number.
+#
+# pathRegex is anchored by Linkerd: it must match the whole path.
+---
+apiVersion: linkerd.io/v1alpha2
+kind: ServiceProfile
+metadata:
+  name: frontend.microservices-demo.svc.cluster.local
+  namespace: microservices-demo
+spec:
+  routes:
+    - name: GET /
+      condition:
+        method: GET
+        pathRegex: /
+    - name: GET /product/{id}
+      condition:
+        method: GET
+        pathRegex: /product/[^/]+
+    - name: GET /cart
+      condition:
+        method: GET
+        pathRegex: /cart
+    - name: POST /cart
+      condition:
+        method: POST
+        pathRegex: /cart
+    - name: POST /cart/empty
+      condition:
+        method: POST
+        pathRegex: /cart/empty
+    - name: POST /cart/checkout
+      condition:
+        method: POST
+        pathRegex: /cart/checkout
+    - name: POST /setCurrency
+      condition:
+        method: POST
+        pathRegex: /setCurrency
+    - name: GET /logout
+      condition:
+        method: GET
+        pathRegex: /logout
+    - name: GET /static/*
+      condition:
+        method: GET
+        pathRegex: /static/.*
+    - name: GET /_healthz
+      condition:
+        method: GET
+        pathRegex: /_healthz
+---
+# gRPC: one route per method, as `linkerd profile --proto` would generate.
+apiVersion: linkerd.io/v1alpha2
+kind: ServiceProfile
+metadata:
+  name: productcatalogservice.microservices-demo.svc.cluster.local
+  namespace: microservices-demo
+spec:
+  routes:
+    - name: ListProducts
+      condition:
+        method: POST
+        pathRegex: /hipstershop\.ProductCatalogService/ListProducts
+    - name: GetProduct
+      condition:
+        method: POST
+        pathRegex: /hipstershop\.ProductCatalogService/GetProduct
+    - name: SearchProducts
+      condition:
+        method: POST
+        pathRegex: /hipstershop\.ProductCatalogService/SearchProducts

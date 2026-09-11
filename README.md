@@ -9,7 +9,7 @@ incident investigation:
 | Service mesh | **Linkerd** — injected into the demo namespace only, with mTLS |
 | Metrics | **VictoriaMetrics** (`vmsingle` + `vmagent`), scraping Kubernetes, node, cAdvisor and every Linkerd proxy |
 | Logs | **VictoriaLogs** + a Vector DaemonSet shipping every pod's stdout/stderr |
-| Dashboards | **Grafana 13**, with VictoriaMetrics + VictoriaLogs datasources and Linkerd's official dashboards |
+| Dashboards | **Grafana 13**, with VictoriaMetrics + VictoriaLogs datasources, Linkerd's official dashboards and a purpose-built **frontend release impact** dashboard |
 | AI SRE | **HolmesGPT**, wired to VictoriaMetrics, VictoriaLogs, Grafana and GitHub |
 
 Everything runs in one minikube profile (`holmesgpt-demo` by default) and does
@@ -63,6 +63,22 @@ FRONTEND_IMAGE_TAG=latest
 
 Then `./setup.sh --only 60`.
 
+For a one-off release without editing `.env`, pass the image on the command
+line; these variables win over `.env` for that run:
+
+```bash
+# deploy a candidate frontend
+FRONTEND_IMAGE_REPO=ghcr.io/ludvigsegerholmop/frontend FRONTEND_IMAGE_TAG=latest ./setup.sh --only 60
+
+# roll back to whatever .env says
+./setup.sh --only 60
+```
+
+The node must be able to pull the image anonymously (a private GHCR package
+fails with `unauthorized`; make the package public or add an imagePullSecret).
+On Apple Silicon a multi-arch image runs natively while the stock amd64-only
+services run under emulation.
+
 ### Why this needs a post-renderer
 
 The upstream Online Boutique chart builds every container image as
@@ -75,11 +91,50 @@ There is no per-service image override — setting `images.repository` would
 repoint *all eleven* services. Patching the Deployment afterwards with
 `kubectl set image` works until the next `helm upgrade` reverts it.
 
-So `manifests/ob-frontend-post-render.sh` pipes Helm's rendered output through
+So `manifests/helm-plugins/ob-frontend-image/post-render.sh` pipes Helm's rendered output through
 kustomize's image transformer, which matches on image *name* and therefore
 rewrites the frontend and nothing else. `scripts/60-online-boutique.sh` asserts
 this afterwards: the frontend must equal your image, and `cartservice` must
 still be on the upstream one.
+
+---
+
+## Watching a release: the frontend release impact dashboard
+
+Grafana folder **Online Boutique**, dashboard **Frontend release impact**
+(`/d/ob-frontend-release-impact`). It is built to answer "what did that
+deployment do?" without any other context:
+
+| Row | What it shows | Source |
+|---|---|---|
+| At a glance | running frontend image, success rate, p95, request rate, **catalog RPCs per request** | kube-state-metrics, Linkerd proxy |
+| User-facing | latency percentiles, requests by status code, success rate, **p95 by route** (`GET /product/{id}`, `GET /cart`, ...) | frontend inbound proxy |
+| Blast radius | outbound RPCs by backend, **productcatalogservice calls by gRPC method**, fan-out ratio, catalog latency, outbound failures | frontend outbound proxy |
+| Resources | CPU and memory against limits, restarts, for frontend and productcatalogservice | kubelet |
+| Logs | log volume by severity, per-path request time from the frontend's own request logs, warnings and errors | VictoriaLogs |
+
+Rollouts are drawn as annotations (a new frontend image appearing in a
+Running pod) and as lanes on the "Frontend image over time" panel, so the
+before/after boundary is always visible.
+
+The per-route panels come from the two Linkerd ServiceProfiles in
+`manifests/online-boutique/serviceprofiles.yaml` (frontend HTTP routes and
+productcatalogservice gRPC methods). Step 60 applies them before installing
+the chart, because a proxy only reads a profile when it first resolves the
+destination: pods that predate a profile never report route metrics until
+they are restarted. Step 65 publishes the dashboard and checks the metrics
+are flowing.
+
+### Load profile
+
+The load generator runs `manifests/online-boutique/locustfile.py` instead of
+the image's built-in one. It keeps the upstream user journey but thinks for
+1-3 s instead of 1-10 s and leans on the product and cart pages, which is where
+a frontend that fans out to the backends shows first. `LOADGEN_USERS` and
+`LOADGEN_RATE` in `.env` (default 20 users, 2/s) size it; both can be
+overridden per run (`LOADGEN_USERS=40 ./setup.sh --only 60`). Edit the file and
+re-run step 60 to change the mix; the pod rolls automatically because the
+file's hash is on the pod template.
 
 ---
 
@@ -96,11 +151,14 @@ scripts/20-linkerd        openssl trust anchor & issuer, CRDs, control plane
 scripts/30-victoria-metrics  VM operator, vmsingle, vmagent, Grafana 13
 scripts/40-victoria-logs  VictoriaLogs + Vector + Grafana datasource
 scripts/50-linkerd-observability  scrape configs, dashboards, linkerd-viz
-scripts/60-online-boutique   the demo app, frontend image swapped
+scripts/60-online-boutique   the demo app, frontend image swapped, load profile mounted
+scripts/65-online-boutique-observability  ServiceProfiles + release impact dashboard
 scripts/70-holmesgpt      secrets, Grafana SA token, Holmes
 scripts/99-verify         live end-to-end checks
 values/                   Helm values, hand-editable
-manifests/                the frontend post-renderer
+manifests/helm-plugins/   the Helm post-renderer (image swap, probes, load profile)
+manifests/online-boutique/  locustfile.py, Linkerd ServiceProfiles
+manifests/grafana/        the release impact dashboard
 certs/                    generated Linkerd CA (gitignored)
 ```
 
@@ -114,7 +172,7 @@ step is a `helm upgrade --install`.
 ```bash
 P=holmesgpt-demo
 
-# Grafana (admin/admin)
+# Grafana (admin/admin); release impact dashboard at /d/ob-frontend-release-impact
 kubectl --context $P -n monitoring port-forward svc/vm-grafana 3000:80
 
 # Online Boutique
@@ -193,6 +251,11 @@ previous install was interrupted mid-`--wait`. Clear it with
 that follow fail with `file integrity checksum failed` in `docker save`, the
 VM lost writes during the interruption and the node's image store is corrupt -
 `./teardown.sh && ./setup.sh` is the only clean fix.
+
+**Per-route panels on the release impact dashboard are empty.** The pods were
+created before the ServiceProfiles (for example after editing
+`manifests/online-boutique/serviceprofiles.yaml`).
+`kubectl -n microservices-demo rollout restart deploy`.
 
 **Pods in the demo namespace have no `linkerd-proxy`.** They were created before
 the namespace annotation. `kubectl -n microservices-demo rollout restart deploy`.

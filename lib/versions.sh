@@ -79,6 +79,11 @@ readonly URL_VICTORIALOGS="http://victorialogs.${NS_MONITORING}.svc.cluster.loca
 readonly GRAFANA_VM_DATASOURCE="VictoriaMetrics"
 readonly GRAFANA_VL_DATASOURCE="VictoriaLogs"
 
+# Online Boutique extras published by scripts/60 and scripts/65.
+readonly OB_LOADGEN_CONFIGMAP="loadgenerator-locustfile"
+readonly OB_DASHBOARD_UID="ob-frontend-release-impact"
+readonly OB_DASHBOARD_FOLDER="Online Boutique"
+
 # The holmes chart names its objects "<release>-holmes" and exposes port 80
 # in front of the container's 5050.
 readonly HOLMES_FULLNAME="${REL_HOLMES}-holmes"

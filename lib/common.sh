@@ -41,12 +41,26 @@ require_cmd() {
 # Configuration: .env then defaults
 # ---------------------------------------------------------------------------
 load_env() {
+  # These may be overridden on the command line for a single run, e.g.
+  #   FRONTEND_IMAGE_TAG=v2 ./setup.sh --only 60
+  # Sourcing .env would otherwise clobber them, so remember and restore.
+  local -a overridable=(FRONTEND_IMAGE_REPO FRONTEND_IMAGE_TAG LOADGEN_USERS LOADGEN_RATE)
+  local -A preset=()
+  local v
+  for v in "${overridable[@]}"; do
+    [[ -n "${!v+x}" ]] && preset[$v]="${!v}"
+  done
+
   if [[ -f "${REPO_ROOT}/.env" ]]; then
     set -a
     # shellcheck disable=SC1091
     source "${REPO_ROOT}/.env"
     set +a
   fi
+
+  for v in "${!preset[@]}"; do
+    printf -v "$v" '%s' "${preset[$v]}"
+  done
 
   : "${MINIKUBE_PROFILE:=holmesgpt-demo}"
   : "${MINIKUBE_DRIVER:=vfkit}"
@@ -65,10 +79,16 @@ load_env() {
   : "${FRONTEND_IMAGE_REPO:=${OB_UPSTREAM_IMAGE_REPO}/frontend}"
   : "${FRONTEND_IMAGE_TAG:=v${VER_ONLINE_BOUTIQUE#v}}"
 
+  # Load generator: simulated users and spawn rate (users/second). The upstream
+  # chart hardcodes 10 and 1; see manifests/online-boutique/locustfile.py.
+  : "${LOADGEN_USERS:=20}"
+  : "${LOADGEN_RATE:=2}"
+
   export MINIKUBE_PROFILE MINIKUBE_DRIVER MINIKUBE_CPUS MINIKUBE_MEMORY MINIKUBE_DISK K8S_VERSION
   export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
   export HOLMES_MODEL OPENROUTER_API_KEY GITHUB_PAT
   export FRONTEND_IMAGE_REPO FRONTEND_IMAGE_TAG
+  export LOADGEN_USERS LOADGEN_RATE
 
   STATE_DIR="${REPO_ROOT}/.state"
   CERT_DIR="${REPO_ROOT}/certs"
