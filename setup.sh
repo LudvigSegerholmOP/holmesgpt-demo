@@ -20,6 +20,8 @@ STEPS=(
   60-online-boutique
   65-online-boutique-observability
   70-holmesgpt
+  75-openwebui
+  80-ingress
   99-verify
 )
 

@@ -88,7 +88,8 @@ add_repo() {
 add_repo victoria-metrics "${REPO_VM}"
 add_repo linkerd-edge     "${REPO_LINKERD}"
 add_repo robusta          "${REPO_ROBUSTA}"
-helm repo update victoria-metrics linkerd-edge robusta >/dev/null
+add_repo open-webui       "${REPO_OPENWEBUI}"
+helm repo update victoria-metrics linkerd-edge robusta open-webui >/dev/null
 ok "Helm repositories ready"
 
 ok "preflight complete"

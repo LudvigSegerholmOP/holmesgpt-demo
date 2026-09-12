@@ -37,6 +37,12 @@ additionalEnvVars:
         name: grafana-api-key
         key: api-key
         optional: true
+  # When a tool result is too large for the context window, Holmes normally
+  # writes it to disk and tells the model to `cat` it, which only works with
+  # the bash toolset. With bash off (below) the model is told to narrow its
+  # query instead, which keeps it on the dedicated tools.
+  - name: HOLMES_TOOL_RESULT_STORAGE_ENABLED
+    value: "false"
 
 toolsets:
   # ---- Kubernetes ----
@@ -73,10 +79,14 @@ toolsets:
   # ---- General ----
   internet:
     enabled: true
+  # Off on purpose: every step should go through a dedicated toolset or MCP
+  # tool, so the chat shows *which* integration produced each finding rather
+  # than an opaque shell command. Costs `kubectl describe`/`rollout history`
+  # style ad-hoc commands; kubernetes_jq_query / kubernetes_tabular_query
+  # cover the same data. Flip to true (with builtin_allowlist: extended) if a
+  # demo needs raw kubectl.
   bash:
-    enabled: true
-    config:
-      builtin_allowlist: "extended"
+    enabled: false
 
   # No Robusta SaaS backend in this demo; leaving it on produces a permanently
   # failing toolset that pollutes Holmes' self-reported health.
@@ -115,6 +125,10 @@ mcpAddons:
       secretName: github-mcp-token
       secretKey: token
     config:
+      # `tools` is a hard allowlist and overrides `toolsets`: read code and
+      # history, read PRs/issues/CI, and open or comment on issues. No pushes,
+      # merges or file writes. get_me is the startup auth probe; keep it.
       toolsets: "repos,issues,pull_requests,actions,context"
+      tools: "get_me,get_file_contents,search_code,list_commits,get_commit,search_commits,list_branches,list_tags,list_releases,get_latest_release,list_pull_requests,pull_request_read,search_pull_requests,list_issues,issue_read,search_issues,issue_write,add_issue_comment,list_issue_types,get_label,actions_list,actions_get,get_job_logs"
     networkPolicy:
       enabled: false

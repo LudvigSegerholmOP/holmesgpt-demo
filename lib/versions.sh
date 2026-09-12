@@ -90,3 +90,34 @@ readonly OB_DASHBOARD_FOLDER="Online Boutique"
 # in front of the container's 5050.
 readonly HOLMES_FULLNAME="${REL_HOLMES}-holmes"
 readonly URL_HOLMES="http://${HOLMES_FULLNAME}.${NS_HOLMES}.svc.cluster.local:80"
+
+# ---------------------------------------------------------------------------
+# Open WebUI + holmes-bridge (scripts/75-openwebui.sh)
+# ---------------------------------------------------------------------------
+readonly REPO_OPENWEBUI="https://helm.openwebui.com/"
+readonly VER_OPENWEBUI="16.5.0"           # Open WebUI 0.11.3
+readonly REL_OPENWEBUI="open-webui"
+# The chart names its objects "<release>" when fullnameOverride is unset and
+# the release name already is "open-webui".
+readonly OPENWEBUI_FULLNAME="${REL_OPENWEBUI}"
+readonly URL_OPENWEBUI="http://${OPENWEBUI_FULLNAME}.${NS_HOLMES}.svc.cluster.local:80"
+
+# holmes-bridge: the Go service in holmes-bridge/ that exposes HolmesGPT as an
+# OpenAI-compatible model. Built on the minikube node; the tag is a hash of
+# the source tree so a rebuild only happens when the source changes.
+readonly BRIDGE_IMAGE_REPO="holmes-bridge"
+readonly BRIDGE_NAME="holmes-bridge"
+readonly BRIDGE_MODEL_ID="holmesgpt"
+readonly URL_HOLMES_BRIDGE="http://${BRIDGE_NAME}.${NS_HOLMES}.svc.cluster.local:80"
+
+# ---------------------------------------------------------------------------
+# Ingress (scripts/80-ingress.sh)
+#
+# Hostname per UI, under INGRESS_DOMAIN from .env (default <minikube ip>.nip.io,
+# which resolves to the node with no local DNS or /etc/hosts changes). The
+# minikube `ingress` addon runs ingress-nginx in this namespace.
+# ---------------------------------------------------------------------------
+readonly NS_INGRESS="ingress-nginx"
+readonly INGRESS_HOST_FRONTEND="shop"
+readonly INGRESS_HOST_GRAFANA="grafana"
+readonly INGRESS_HOST_OPENWEBUI="chat"

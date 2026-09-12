@@ -1,0 +1,108 @@
+# open-webui
+#
+# Chat front-end for HolmesGPT. It talks to holmes-bridge (holmes-bridge/),
+# which presents HolmesGPT as an OpenAI-compatible model, so no Open WebUI
+# plugin or pipeline is needed. The bridge URL is injected by
+# scripts/75-openwebui.sh from lib/versions.sh.
+
+# The only "model" is HolmesGPT, via the bridge.
+ollama:
+  enabled: false
+pipelines:
+  enabled: false
+enableOpenaiApi: true
+# openaiBaseApiUrl comes from the generated overlay .state/openwebui-endpoints.yaml
+openaiApiKey: "holmes-bridge"
+
+# Single replica, no Redis: the in-process socket manager is enough.
+websocket:
+  enabled: false
+
+# The slim image skips the bundled PyTorch/embedding stack (~3 GB) that only
+# document RAG needs.
+image:
+  useSlim: true
+
+# The chart's init container seeds the volume with `cp /app/backend/data/*`,
+# which fails on the slim image because that directory does not exist there.
+# Same intent, tolerant of an empty or missing source.
+copyAppData:
+  command: ["sh", "-c"]
+  args:
+    - "if [ -d /app/backend/data ]; then cp -R -n /app/backend/data/. /tmp/app-data/; fi; true"
+
+# Open WebUI keeps its own SQLite database (chats, users, settings) here.
+persistence:
+  enabled: true
+  size: 2Gi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    memory: 1536Mi
+
+extraEnvVars:
+  # Demo: no login. Open WebUI runs as a single admin user.
+  - name: WEBUI_AUTH
+    value: "False"
+  - name: WEBUI_NAME
+    value: "HolmesGPT"
+  - name: DEFAULT_MODELS
+    value: "holmesgpt"
+
+  # Send the chat id and user as headers on every model request. The bridge
+  # keys HolmesGPT's conversation history on the chat id.
+  - name: ENABLE_FORWARD_USER_INFO_HEADERS
+    value: "True"
+
+  # Environment wins over settings persisted in Open WebUI's database, so a
+  # values change takes effect on the next rollout.
+  - name: ENABLE_PERSISTENT_CONFIG
+    value: "False"
+
+  # Every one of these fires an extra LLM request per chat message. Against
+  # HolmesGPT that would mean extra investigations, so they are all off.
+  - name: ENABLE_TITLE_GENERATION
+    value: "False"
+  - name: ENABLE_TAGS_GENERATION
+    value: "False"
+  - name: ENABLE_FOLLOW_UP_GENERATION
+    value: "False"
+  - name: ENABLE_AUTOCOMPLETE_GENERATION
+    value: "False"
+  - name: ENABLE_RETRIEVAL_QUERY_GENERATION
+    value: "False"
+  - name: ENABLE_SEARCH_QUERY_GENERATION
+    value: "False"
+  - name: ENABLE_IMAGE_PROMPT_GENERATION
+    value: "False"
+
+  # Document RAG is not used. With the default (local sentence-transformers)
+  # engine the slim image downloads an embedding model from Hugging Face on
+  # every fresh start; pointing the engine elsewhere skips that entirely.
+  - name: RAG_EMBEDDING_ENGINE
+    value: "openai"
+  - name: RAG_EMBEDDING_MODEL_AUTO_UPDATE
+    value: "False"
+  - name: RAG_RERANKING_MODEL_AUTO_UPDATE
+    value: "False"
+
+  # Investigations can take minutes; the default aiohttp timeout is 300 s.
+  - name: AIOHTTP_CLIENT_TIMEOUT
+    value: "1800"
+  - name: AIOHTTP_CLIENT_TIMEOUT_MODEL_LIST
+    value: "30"
+
+  # Local demo: no phoning home.
+  - name: ENABLE_VERSION_UPDATE_CHECK
+    value: "False"
+  - name: ENABLE_COMMUNITY_SHARING
+    value: "False"
+  - name: SCARF_NO_ANALYTICS
+    value: "true"
+  - name: DO_NOT_TRACK
+    value: "true"
+  - name: ANONYMIZED_TELEMETRY
+    value: "false"

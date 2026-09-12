@@ -1,0 +1,82 @@
+# Ingress rules for the demo UIs. Rendered by scripts/80-ingress.sh: every
+# __PLACEHOLDER__ is substituted from lib/versions.sh and the .env domain.
+#
+# Hostname-based, one host per UI, so nothing is served from a sub-path and no
+# application needs to know it sits behind a proxy. The controller is the
+# minikube `ingress` addon (ingress-nginx), which binds ports 80/443 on the
+# node, and the node IP is reachable from the host with the vfkit driver.
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: frontend
+  namespace: __NS_DEMO__
+  labels:
+    app.kubernetes.io/part-of: holmesgpt-demo
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: __HOST_FRONTEND__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                # The ClusterIP Service, not frontend-external: that one is a
+                # LoadBalancer that never gets an address on minikube.
+                name: frontend
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: grafana
+  namespace: __NS_MONITORING__
+  labels:
+    app.kubernetes.io/part-of: holmesgpt-demo
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: __HOST_GRAFANA__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: __SVC_GRAFANA__
+                port:
+                  number: 80
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: open-webui
+  namespace: __NS_HOLMES__
+  labels:
+    app.kubernetes.io/part-of: holmesgpt-demo
+  annotations:
+    # A HolmesGPT investigation streams for minutes. nginx's defaults (60 s
+    # read timeout, response buffering) would cut the stream or hold it back
+    # until the end. 1800 s matches AIOHTTP_CLIENT_TIMEOUT in
+    # values/open-webui.yaml.
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "1800"
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    # Uploads (Open WebUI accepts files in chat); nginx defaults to 1 MB.
+    nginx.ingress.kubernetes.io/proxy-body-size: "0"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: __HOST_OPENWEBUI__
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: __SVC_OPENWEBUI__
+                port:
+                  number: 80

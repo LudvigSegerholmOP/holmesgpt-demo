@@ -223,6 +223,26 @@ report "models" "$(printf '%s' "${model_json}" | head -c 140)"
 holmes_api_up() { [[ -n "${model_json}" ]]; }
 check "Holmes API answers" holmes_api_up
 
+printf '\n%sOpen WebUI + holmes-bridge%s\n' "${C_BOLD}" "${C_RESET}"
+bridge_ready() {
+  k -n "${NS_HOLMES}" get deploy "${BRIDGE_NAME}" \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -q '^[1-9]'
+}
+check "holmes-bridge pod ready" bridge_ready
+bridge_models=$(incluster_curl "${NS_HOLMES}" "${URL_HOLMES_BRIDGE}/v1/models" 2>/dev/null || true)
+bridge_lists_model() { printf '%s' "${bridge_models}" | grep -q "\"id\": *\"${BRIDGE_MODEL_ID}\""; }
+check "holmes-bridge serves model '${BRIDGE_MODEL_ID}'" bridge_lists_model
+bridge_stats=$(incluster_curl "${NS_HOLMES}" "${URL_HOLMES_BRIDGE}/" 2>/dev/null || true)
+report "bridge db" "$(printf '%s' "${bridge_stats}" | python3 -c 'import sys,json
+try:
+    s=json.load(sys.stdin)["stats"]; print("%d conversations, %d requests, %d tool calls" % (s["conversations"], s["requests"], s["tool_calls"]))
+except Exception: print("unavailable")' 2>/dev/null)"
+openwebui_ready() {
+  k -n "${NS_HOLMES}" get statefulset "${OPENWEBUI_FULLNAME}" \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -q '^[1-9]'
+}
+check "Open WebUI pod ready" openwebui_ready
+
 # Holmes self-reports, per toolset, whether it actually reached its backend.
 # This is the meaningful integration check. Holmes 0.40 has no /api/toolsets
 # endpoint: /api/info carries only the counts, and the per-toolset verdicts are
@@ -274,6 +294,25 @@ else
 fi
 
 # ---------------------------------------------------------------------------
+printf '\n%sIngress%s\n' "${C_BOLD}" "${C_RESET}"
+INGRESS_DOMAIN_LIVE=$(ingress_domain 2>/dev/null || true)
+ingress_controller_ready() {
+  k -n "${NS_INGRESS}" get deploy ingress-nginx-controller \
+    -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -q '^[1-9]'
+}
+# ingress_serves <host> <path> - the controller answers 200 from the host machine
+ingress_serves() {
+  local ip
+  ip=$(minikube -p "${MINIKUBE_PROFILE}" ip 2>/dev/null) || return 1
+  curl -s -o /dev/null -w '%{http_code}' --max-time 10 \
+    --resolve "$1:80:${ip}" "http://$1$2" 2>/dev/null | grep -q '^200$'
+}
+check "ingress-nginx controller ready" ingress_controller_ready
+check "frontend via ingress" ingress_serves "${INGRESS_HOST_FRONTEND}.${INGRESS_DOMAIN_LIVE}" /
+check "Grafana via ingress" ingress_serves "${INGRESS_HOST_GRAFANA}.${INGRESS_DOMAIN_LIVE}" /api/health
+check "Open WebUI via ingress" ingress_serves "${INGRESS_HOST_OPENWEBUI}.${INGRESS_DOMAIN_LIVE}" /health
+
+# ---------------------------------------------------------------------------
 printf '\n%sSummary%s\n' "${C_BOLD}" "${C_RESET}"
 if (( FAIL > 0 )); then
   printf '  %s%d passed%s, %s%d failed%s\n' "${C_GREEN}" "${PASS}" "${C_RESET}" "${C_RED}" "${FAIL}" "${C_RESET}"
@@ -283,14 +322,20 @@ fi
 
 cat <<EOF
 
-${C_BOLD}Access${C_RESET}
-  Grafana          kubectl --context ${MINIKUBE_PROFILE} -n ${NS_MONITORING} port-forward svc/${REL_VM}-grafana 3000:80
-                   http://localhost:3000  (${GRAFANA_ADMIN_USER} / ${GRAFANA_ADMIN_PASSWORD})
-                   release impact: http://localhost:3000/d/${OB_DASHBOARD_UID}
-  Online Boutique  minikube -p ${MINIKUBE_PROFILE} service -n ${NS_DEMO} frontend-external
+${C_BOLD}Access${C_RESET}  (ingress, step 80; no port-forward needed)
+  Online Boutique  http://${INGRESS_HOST_FRONTEND}.${INGRESS_DOMAIN_LIVE:-<domain>}
+  Grafana          http://${INGRESS_HOST_GRAFANA}.${INGRESS_DOMAIN_LIVE:-<domain>}  (${GRAFANA_ADMIN_USER} / ${GRAFANA_ADMIN_PASSWORD})
+                   release impact: http://${INGRESS_HOST_GRAFANA}.${INGRESS_DOMAIN_LIVE:-<domain>}/d/${OB_DASHBOARD_UID}
+  Open WebUI       http://${INGRESS_HOST_OPENWEBUI}.${INGRESS_DOMAIN_LIVE:-<domain>}  (no login; chat with the 'holmesgpt' model)
+
+${C_BOLD}Port-forwards${C_RESET}  (everything else, or if the ingress is down)
   Linkerd viz      linkerd viz dashboard --context ${MINIKUBE_PROFILE}
   VictoriaLogs     kubectl --context ${MINIKUBE_PROFILE} -n ${NS_MONITORING} port-forward svc/victorialogs 9428:9428
   HolmesGPT        kubectl --context ${MINIKUBE_PROFILE} -n ${NS_HOLMES} port-forward svc/${HOLMES_FULLNAME} 5050:80
+  holmes-bridge    kubectl --context ${MINIKUBE_PROFILE} -n ${NS_HOLMES} port-forward svc/${BRIDGE_NAME} 8000:80
+                   http://localhost:8000/api/conversations  (SQLite: conversations, requests, tool calls)
+  Grafana          kubectl --context ${MINIKUBE_PROFILE} -n ${NS_MONITORING} port-forward svc/${REL_VM}-grafana 3000:80
+  Open WebUI       kubectl --context ${MINIKUBE_PROFILE} -n ${NS_HOLMES} port-forward svc/${OPENWEBUI_FULLNAME} 8080:80
 
 ${C_BOLD}Ask HolmesGPT something${C_RESET}
   curl -s localhost:5050/api/chat \\

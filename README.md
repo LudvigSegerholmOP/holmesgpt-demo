@@ -11,6 +11,7 @@ incident investigation:
 | Logs | **VictoriaLogs** + a Vector DaemonSet shipping every pod's stdout/stderr |
 | Dashboards | **Grafana 13**, with VictoriaMetrics + VictoriaLogs datasources, Linkerd's official dashboards and a purpose-built **frontend release impact** dashboard |
 | AI SRE | **HolmesGPT**, wired to VictoriaMetrics, VictoriaLogs, Grafana and GitHub |
+| Chat UI | **Open WebUI**, talking to HolmesGPT through **holmes-bridge** (a Go service in `holmes-bridge/`, with SQLite persistence) |
 
 Everything runs in one minikube profile (`holmesgpt-demo` by default) and does
 not touch any other cluster or kube-context.
@@ -42,7 +43,7 @@ likely to change:
 |---|---|
 | `OPENROUTER_API_KEY` | **Required.** HolmesGPT's LLM backend. |
 | `HOLMES_MODEL` | LiteLLM model string, e.g. `openrouter/anthropic/claude-sonnet-4.5`. |
-| `GITHUB_PAT` | Enables the GitHub MCP integration, and pulls a private `ghcr.io` frontend (needs `read:packages`). Omit to skip both. |
+| `GITHUB_PAT` | Enables the GitHub MCP integration (read code, open issues), and pulls a private `ghcr.io` frontend (needs `read:packages`). Omit to skip both. |
 | `FRONTEND_IMAGE_REPO` / `FRONTEND_IMAGE_TAG` | The frontend image (see below). |
 | `MINIKUBE_CPUS` / `MINIKUBE_MEMORY` | Cluster sizing. Defaults: 6 CPU / 12 GB. |
 
@@ -63,6 +64,52 @@ Kubernetes Secrets, each in the namespace of the thing that uses it:
 
 Re-running a step re-applies its secrets, so rotating a key is: edit `.env`,
 `./setup.sh --only 70` (or `--only 60` for the pull secret).
+
+---
+
+## Chatting with HolmesGPT (Open WebUI)
+
+Step 75 installs [Open WebUI](https://github.com/open-webui/open-webui) in the
+`holmesgpt` namespace and a Go service, **holmes-bridge**, that exposes
+HolmesGPT as an OpenAI-compatible model. Open WebUI sees one model,
+`holmesgpt`, and needs no plugins or pipelines.
+
+```bash
+open http://chat.$(minikube -p holmesgpt-demo ip).nip.io   # no login for the demo
+```
+
+Ask something like *"Why is the frontend slow? Check Linkerd latency and the
+recent commits."* Every tool HolmesGPT runs shows up as a collapsible step in
+the reply, labelled with the tool and toolset (`victorialogs_query
+(victorialogs): …`, `get_file_contents (github)`), and the final analysis
+follows. The bash toolset is off in `values/holmes.yaml` so every step goes
+through a dedicated integration; the GitHub MCP server is limited to reading
+code, commits, PRs, CI logs and issues, plus creating and commenting on
+issues.
+
+**Persistence.** Two SQLite databases, each on its own PersistentVolumeClaim:
+
+| Database | Where | Holds |
+|---|---|---|
+| Open WebUI | `open-webui` PVC | chats, users, UI settings |
+| holmes-bridge | `holmes-bridge-data` PVC | HolmesGPT's full conversation history per chat (tool calls included), every request with tokens/cost/duration, every tool call with its output |
+
+Because the bridge resumes HolmesGPT from its stored history, follow-up
+questions reuse the investigation so far rather than starting over. Browse the
+record:
+
+```bash
+kubectl --context holmesgpt-demo -n holmesgpt port-forward svc/holmes-bridge 8000:80
+curl -s localhost:8000/api/conversations
+curl -s localhost:8000/api/requests?limit=5
+curl -s localhost:8000/api/requests/1/tool_calls
+```
+
+**Building the bridge.** `./setup.sh --only 75` builds the image from
+`holmes-bridge/` on the minikube node (`minikube image build`), so no Go
+toolchain is needed locally. The tag is a hash of the source tree: edit the Go
+code, re-run step 75, and only then is a new image built and rolled out. See
+`holmes-bridge/README.md` for the API and configuration.
 
 ---
 
@@ -173,11 +220,14 @@ scripts/50-linkerd-observability  scrape configs, dashboards, linkerd-viz
 scripts/60-online-boutique   the demo app, frontend image swapped, load profile mounted
 scripts/65-online-boutique-observability  ServiceProfiles + release impact dashboard
 scripts/70-holmesgpt      secrets (namespace holmesgpt), Grafana SA token, Holmes
+scripts/75-openwebui      holmes-bridge image + Deployment, Open WebUI chart
+scripts/80-ingress        ingress addon + hostnames for the three UIs
 scripts/99-verify         live end-to-end checks
 values/                   Helm values, hand-editable
 manifests/helm-plugins/   the Helm post-renderer (image swap, probes, load profile)
 manifests/online-boutique/  locustfile.py, Linkerd ServiceProfiles
 manifests/grafana/        the release impact dashboard
+manifests/ingress/        Ingress rules for shop., grafana., chat.<domain>
 certs/                    generated Linkerd CA (gitignored)
 ```
 
@@ -188,14 +238,31 @@ step is a `helm upgrade --install`.
 
 ## Access
 
+Step 80 enables minikube's `ingress` addon (ingress-nginx on the node's ports
+80/443) and publishes one hostname per UI. With the vfkit driver the node IP is
+routable from macOS, so nothing needs to be port-forwarded or tunnelled:
+
+| UI | URL |
+|---|---|
+| Online Boutique | `http://shop.<domain>` |
+| Grafana (admin/admin) | `http://grafana.<domain>` — release impact dashboard at `/d/ob-frontend-release-impact` |
+| Open WebUI | `http://chat.<domain>` |
+
+`<domain>` defaults to `<minikube ip>.nip.io` (e.g. `192.168.64.6.nip.io`);
+[nip.io](https://nip.io) is a public wildcard DNS that resolves any
+`a.b.c.d.nip.io` name to `a.b.c.d`, so there is nothing to configure locally.
+`./setup.sh --only 99` prints the live URLs. If the node IP changes (it
+normally survives restarts) re-run `./setup.sh --only 80`. If your DNS resolver
+blocks nip.io, set `INGRESS_DOMAIN` in `.env` and point the three names at
+`minikube -p holmesgpt-demo ip` in `/etc/hosts`.
+
+The Open WebUI rule turns off nginx's response buffering and raises its
+timeouts to 30 min, because a HolmesGPT investigation streams for minutes.
+
+Everything else is still a port-forward:
+
 ```bash
 P=holmesgpt-demo
-
-# Grafana (admin/admin); release impact dashboard at /d/ob-frontend-release-impact
-kubectl --context $P -n monitoring port-forward svc/vm-grafana 3000:80
-
-# Online Boutique
-minikube -p $P service -n microservices-demo frontend-external
 
 # Linkerd dashboard
 linkerd viz dashboard --context $P

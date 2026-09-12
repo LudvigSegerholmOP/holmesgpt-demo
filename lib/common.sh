@@ -92,11 +92,17 @@ load_env() {
   : "${LOADGEN_USERS:=20}"
   : "${LOADGEN_RATE:=2}"
 
+  # Domain the Ingress hostnames hang off (step 80). Empty means
+  # "<minikube ip>.nip.io", resolved when the step runs, since the node IP is
+  # only known once the cluster exists.
+  : "${INGRESS_DOMAIN:=}"
+
   export MINIKUBE_PROFILE MINIKUBE_DRIVER MINIKUBE_CPUS MINIKUBE_MEMORY MINIKUBE_DISK K8S_VERSION
   export GRAFANA_ADMIN_USER GRAFANA_ADMIN_PASSWORD
   export HOLMES_MODEL OPENROUTER_API_KEY GITHUB_PAT GITHUB_USER
   export FRONTEND_IMAGE_REPO FRONTEND_IMAGE_TAG
   export LOADGEN_USERS LOADGEN_RATE
+  export INGRESS_DOMAIN
 
   STATE_DIR="${REPO_ROOT}/.state"
   CERT_DIR="${REPO_ROOT}/certs"
@@ -228,6 +234,18 @@ incluster_curl() {
 
 # Apply stdin to the cluster.
 kapply() { k apply -f -; }
+
+# The domain the Ingress hostnames live under: INGRESS_DOMAIN from .env, or
+# <node ip>.nip.io. Empty when the cluster is not running.
+ingress_domain() {
+  if [[ -n "${INGRESS_DOMAIN}" ]]; then
+    printf '%s' "${INGRESS_DOMAIN}"
+    return
+  fi
+  local ip
+  ip=$(minikube -p "${MINIKUBE_PROFILE}" ip 2>/dev/null) || return 1
+  [[ -n "${ip}" ]] && printf '%s.nip.io' "${ip}"
+}
 
 # Exported so `bash -c` / xargs subshells can still reach the cluster helpers.
 export -f k h incluster_curl retry workload_ready 2>/dev/null || true

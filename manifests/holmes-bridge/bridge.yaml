@@ -1,0 +1,100 @@
+# holmes-bridge: OpenAI-compatible front for HolmesGPT, with SQLite persistence.
+# Rendered by scripts/75-openwebui.sh: __PLACEHOLDERS__ are substituted there.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: __NAME__-data
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: __NAME__
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: __NAME__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: __NAME__
+spec:
+  selector:
+    app.kubernetes.io/name: __NAME__
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: __NAME__
+  namespace: __NAMESPACE__
+  labels:
+    app.kubernetes.io/name: __NAME__
+spec:
+  replicas: 1
+  # SQLite on a ReadWriteOnce volume: never run two pods at once.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: __NAME__
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: __NAME__
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+      containers:
+        - name: bridge
+          image: __IMAGE__
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: HOLMES_URL
+              value: "__HOLMES_URL__"
+            - name: MODEL_ID
+              value: "__MODEL_ID__"
+            - name: MODEL_NAME
+              value: "HolmesGPT"
+            - name: DB_PATH
+              value: /data/holmes-bridge.db
+            - name: TOOL_RESULT_MAX_CHARS
+              value: "6000"
+            - name: HOLMES_TIMEOUT
+              value: 20m
+            - name: LOG_LEVEL
+              value: info
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          resources:
+            requests:
+              cpu: 20m
+              memory: 64Mi
+            limits:
+              memory: 256Mi
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 20
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: __NAME__-data
