@@ -84,6 +84,7 @@ log "applying Linkerd ServiceProfiles (frontend routes, productcatalogservice me
 k apply -f "${REPO_ROOT}/manifests/online-boutique/serviceprofiles.yaml" >/dev/null
 ok "ServiceProfiles applied"
 
+# cartservice gets twice the chart's default memory (128Mi/256Mi).
 log "installing the onlineboutique chart"
 h upgrade --install "${REL_OB}" \
   "oci://us-docker.pkg.dev/online-boutique-ci/charts/onlineboutique" \
@@ -99,6 +100,8 @@ h upgrade --install "${REL_OB}" \
   --set googleCloudOperations.profiler=false \
   --set googleCloudOperations.tracing=false \
   --set googleCloudOperations.metrics=false \
+  --set cartService.resources.requests.memory=256Mi \
+  --set cartService.resources.limits.memory=512Mi \
   --wait --timeout 15m
 
 wait_rollout "${NS_DEMO}" 10m
