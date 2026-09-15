@@ -48,10 +48,15 @@ log "frontend image: ${FRONTEND_IMAGE_REPO}:${FRONTEND_IMAGE_TAG}"
 if [[ "${FRONTEND_IMAGE_REPO}" == "${OB_UPSTREAM_IMAGE_REPO}/frontend" ]]; then
   dim "     (upstream default - set FRONTEND_IMAGE_REPO/_TAG in .env to use your own build)"
 elif [[ "${FRONTEND_IMAGE_REPO}" == ghcr.io/* ]]; then
-  if [[ -n "${GITHUB_PAT}" ]]; then
-    ok "ghcr.io frontend: will pull as ${GITHUB_USER} with GITHUB_PAT (needs read:packages)"
+  if ghcr_image_pullable "${FRONTEND_IMAGE_REPO}" "${FRONTEND_IMAGE_TAG}"; then
+    if [[ -n "${GHCR_PAT}" ]]; then
+      ok "ghcr.io frontend readable as ${GITHUB_USER} with GHCR_PAT"
+    else
+      ok "ghcr.io frontend is public, no pull secret needed"
+    fi
   else
-    warn "ghcr.io frontend with GITHUB_PAT unset: the package must be public or the pull fails"
+    ghcr_access_hint "${FRONTEND_IMAGE_REPO}"
+    die "the cluster would not be able to pull ${FRONTEND_IMAGE_REPO}:${FRONTEND_IMAGE_TAG} (step 60 would fail)"
   fi
 fi
 

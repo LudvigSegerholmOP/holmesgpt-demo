@@ -21,23 +21,31 @@ inject=$(k get namespace "${NS_DEMO}" -o jsonpath='{.metadata.annotations.linker
   || die "namespace ${NS_DEMO} is not annotated linkerd.io/inject=enabled (run scripts/10-cluster.sh)"
 
 # ---------------------------------------------------------------------------
-# Private GHCR frontend. The node cannot pull a private ghcr.io package
-# anonymously, so build a docker-registry secret from GITHUB_PAT (needs the
-# read:packages scope) and have the post-renderer attach it to the frontend
-# Deployment only. Anything not on ghcr.io is assumed public.
+# GHCR frontend. The node cannot pull a private ghcr.io package anonymously,
+# so build a docker-registry secret from GHCR_PAT (a classic PAT with
+# read:packages; defaults to GITHUB_PAT) and have the post-renderer attach it
+# to the frontend Deployment only. Anything not on ghcr.io is assumed public.
+# Check the pull from here first: a bad token in the cluster only surfaces as
+# ImagePullBackOff once the Helm --wait below has timed out.
 # ---------------------------------------------------------------------------
 OB_FRONTEND_PULL_SECRET=""
 if [[ "${FRONTEND_IMAGE_REPO}" == ghcr.io/* ]]; then
-  if [[ -n "${GITHUB_PAT}" ]]; then
+  if ghcr_image_pullable "${FRONTEND_IMAGE_REPO}" "${FRONTEND_IMAGE_TAG}"; then
+    ok "ghcr.io manifest for ${FRONTEND_IMAGE_REPO}:${FRONTEND_IMAGE_TAG} is readable${GHCR_PAT:+ as ${GITHUB_USER}}"
+  else
+    ghcr_access_hint "${FRONTEND_IMAGE_REPO}"
+    die "the cluster would not be able to pull ${FRONTEND_IMAGE_REPO}:${FRONTEND_IMAGE_TAG}"
+  fi
+  if [[ -n "${GHCR_PAT}" ]]; then
     k -n "${NS_DEMO}" create secret docker-registry "${OB_PULL_SECRET}" \
       --docker-server=ghcr.io \
       --docker-username="${GITHUB_USER}" \
-      --docker-password="${GITHUB_PAT}" \
+      --docker-password="${GHCR_PAT}" \
       --dry-run=client -o yaml | k apply -f - >/dev/null
     OB_FRONTEND_PULL_SECRET="${OB_PULL_SECRET}"
     ok "imagePullSecret ${NS_DEMO}/${OB_PULL_SECRET} (ghcr.io as ${GITHUB_USER})"
   else
-    warn "GITHUB_PAT unset: ${FRONTEND_IMAGE_REPO} must be pullable anonymously"
+    dim "     GHCR_PAT unset; the package is public, no imagePullSecret needed"
   fi
 fi
 export OB_FRONTEND_PULL_SECRET

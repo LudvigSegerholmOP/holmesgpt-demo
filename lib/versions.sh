@@ -43,6 +43,10 @@ readonly OB_UPSTREAM_IMAGE_REPO="us-central1-docker.pkg.dev/google-samples/micro
 # (the Online Boutique images are amd64-only). See scripts/10-cluster.sh.
 readonly BINFMT_IMAGE="tonistiigi/binfmt:qemu-v10.2.3"
 
+# Throwaway pod used to tar a PersistentVolume in and out of the cluster
+# (volume_backup / volume_restore in lib/common.sh). Needs tar, gzip, find.
+readonly VOLUME_HELPER_IMAGE="busybox:1.37.0"
+
 # ---------------------------------------------------------------------------
 # Namespaces
 # ---------------------------------------------------------------------------
@@ -101,6 +105,9 @@ readonly REL_OPENWEBUI="open-webui"
 # the release name already is "open-webui".
 readonly OPENWEBUI_FULLNAME="${REL_OPENWEBUI}"
 readonly URL_OPENWEBUI="http://${OPENWEBUI_FULLNAME}.${NS_HOLMES}.svc.cluster.local:80"
+# The chart's PVC (mounted at /app/backend/data: webui.db, uploads/,
+# vector_db/, cache/) is named after the release too.
+readonly PVC_OPENWEBUI="${OPENWEBUI_FULLNAME}"
 
 # holmes-bridge: the Go service in holmes-bridge/ that exposes HolmesGPT as an
 # OpenAI-compatible model. Built on the minikube node; the tag is a hash of
@@ -109,6 +116,12 @@ readonly BRIDGE_IMAGE_REPO="holmes-bridge"
 readonly BRIDGE_NAME="holmes-bridge"
 readonly BRIDGE_MODEL_ID="holmesgpt"
 readonly URL_HOLMES_BRIDGE="http://${BRIDGE_NAME}.${NS_HOLMES}.svc.cluster.local:80"
+# manifests/holmes-bridge/bridge.yaml names the PVC "<name>-data".
+readonly PVC_HOLMES_BRIDGE="${BRIDGE_NAME}-data"
+
+# Where teardown.sh / backup.sh put each volume, under BACKUP_DIR (backups/).
+readonly BACKUP_FILE_OPENWEBUI="open-webui.tar.gz"
+readonly BACKUP_FILE_HOLMES_BRIDGE="holmes-bridge.tar.gz"
 
 # ---------------------------------------------------------------------------
 # Ingress (scripts/80-ingress.sh)

@@ -14,6 +14,24 @@ step "Open WebUI ${VER_OPENWEBUI} + holmes-bridge"
 ensure_ns "${NS_HOLMES}"
 
 # ---------------------------------------------------------------------------
+# Volumes. Both workloads keep SQLite on a PVC, and teardown.sh saves those to
+# backups/ before deleting the cluster. A volume that does not exist yet at
+# this point is new, so once its workload is up it gets the backup unpacked
+# into it (volume_restore in lib/common.sh). A volume that already exists is
+# left alone: re-running this step must never roll live chats back.
+# ---------------------------------------------------------------------------
+volume_is_new() { ! k -n "${NS_HOLMES}" get pvc "$1" >/dev/null 2>&1; }
+restore_if_new() {
+  local new=$1 target=$2 pvc=$3 file="${BACKUP_DIR}/$4"
+  ${new} || return 0
+  [[ -s "${file}" ]] || return 0
+  volume_restore "${NS_HOLMES}" "${target}" "${pvc}" "${file}"
+  wait_rollout "${NS_HOLMES}" 5m "${target}"
+}
+bridge_volume_new=false;   volume_is_new "${PVC_HOLMES_BRIDGE}" && bridge_volume_new=true
+openwebui_volume_new=false; volume_is_new "${PVC_OPENWEBUI}"     && openwebui_volume_new=true
+
+# ---------------------------------------------------------------------------
 # holmes-bridge image.
 #
 # Built with the node's container runtime (`minikube image build`), so no Go
@@ -55,6 +73,7 @@ sed -e "s|__NAME__|${BRIDGE_NAME}|g" \
   | k apply -f - >/dev/null
 wait_rollout "${NS_HOLMES}" 5m "deployment/${BRIDGE_NAME}"
 ok "${BRIDGE_NAME} rolled out"
+restore_if_new "${bridge_volume_new}" "deployment/${BRIDGE_NAME}" "${PVC_HOLMES_BRIDGE}" "${BACKUP_FILE_HOLMES_BRIDGE}"
 
 # ---------------------------------------------------------------------------
 # Open WebUI. The bridge URL is generated here so it is defined once, in
@@ -76,6 +95,7 @@ h upgrade --install "${REL_OPENWEBUI}" open-webui/open-webui \
   --wait --timeout 15m
 
 wait_rollout "${NS_HOLMES}" 10m "statefulset/${OPENWEBUI_FULLNAME}"
+restore_if_new "${openwebui_volume_new}" "statefulset/${OPENWEBUI_FULLNAME}" "${PVC_OPENWEBUI}" "${BACKUP_FILE_OPENWEBUI}"
 
 # ---------------------------------------------------------------------------
 # Verify the chain UI -> bridge -> Holmes end to end, without an LLM call.

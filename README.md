@@ -29,8 +29,10 @@ cp .env.example .env                               # then edit it
 `.env` needs at minimum an `OPENROUTER_API_KEY`. Expect the first run to take
 15–25 minutes, most of it pulling images.
 
-Tear it down with `./teardown.sh` (add `--certs` to also drop the generated
-Linkerd CA).
+Tear it down with `./teardown.sh`. Your chats survive: the teardown saves the
+Open WebUI and holmes-bridge volumes to `backups/` first, and the next
+`./setup.sh` puts them back (see [Surviving a teardown](#surviving-a-teardown)).
+Add `--certs` to also drop the generated Linkerd CA.
 
 ---
 
@@ -43,7 +45,8 @@ likely to change:
 |---|---|
 | `OPENROUTER_API_KEY` | **Required.** HolmesGPT's LLM backend. |
 | `HOLMES_MODEL` | LiteLLM model string, e.g. `openrouter/anthropic/claude-sonnet-4.5`. |
-| `GITHUB_PAT` | Enables the GitHub MCP integration (read code, open issues), and pulls a private `ghcr.io` frontend (needs `read:packages`). Omit to skip both. |
+| `GITHUB_PAT` | Enables the GitHub MCP integration (read code, open issues). Omit to skip it. |
+| `GHCR_PAT` | Classic PAT with `read:packages` for pulling a private `ghcr.io` frontend. Defaults to `GITHUB_PAT`; omit if the package is public. |
 | `FRONTEND_IMAGE_REPO` / `FRONTEND_IMAGE_TAG` | The frontend image (see below). |
 | `MINIKUBE_CPUS` / `MINIKUBE_MEMORY` | Cluster sizing. Defaults: 6 CPU / 12 GB. |
 
@@ -59,7 +62,7 @@ Kubernetes Secrets, each in the namespace of the thing that uses it:
 |---|---|---|---|
 | `OPENROUTER_API_KEY` | `holmes-llm-keys` | `holmesgpt` | HolmesGPT LLM backend (step 70) |
 | `GITHUB_PAT` | `github-mcp-token` | `holmesgpt` | HolmesGPT GitHub MCP server (step 70) |
-| `GITHUB_PAT` + `GITHUB_USER` | `ghcr-pull` (docker-registry) | `microservices-demo` | frontend `imagePullSecret`, only when the image is on `ghcr.io` (step 60) |
+| `GHCR_PAT` + `GITHUB_USER` | `ghcr-pull` (docker-registry) | `microservices-demo` | frontend `imagePullSecret`, only when the image is on a private `ghcr.io` package (step 60) |
 | *(minted)* | `grafana-api-key` | `holmesgpt` | HolmesGPT Grafana toolset (step 70) |
 
 Re-running a step re-applies its secrets, so rotating a key is: edit `.env`,
@@ -105,6 +108,33 @@ curl -s localhost:8000/api/requests?limit=5
 curl -s localhost:8000/api/requests/1/tool_calls
 ```
 
+### Surviving a teardown
+
+`minikube delete` takes every PersistentVolume with it, so both databases are
+copied out of the cluster before that happens and copied back into the next
+one:
+
+```bash
+./teardown.sh              # -> backups/open-webui.tar.gz, backups/holmes-bridge.tar.gz
+./setup.sh                 # step 75 unpacks them into the new, empty volumes
+./backup.sh                # a snapshot any time, without tearing down
+./backup.sh --restore      # roll the running cluster back to backups/
+./teardown.sh --no-backup  # tear down without touching backups/
+rm -rf backups/            # next setup starts with empty chats
+```
+
+Step 75 only restores into a volume it has just created, so re-running it on a
+live cluster never rolls chats back; `./backup.sh --restore` is the explicit
+way to do that. If the backup fails, the teardown stops before deleting
+anything.
+
+The copy is taken from a throwaway busybox pod with the volume mounted, with
+the owning workload scaled to zero for the few seconds it takes. That matters
+because Open WebUI runs SQLite in WAL mode: a `webui.db` copied out of the
+running pod would be missing everything still in `webui.db-wal`, which is
+typically most of the recent chats. `backups/` is gitignored. Open WebUI's
+`cache/` (downloaded models, thumbnails) is left out of the archive.
+
 **Building the bridge.** `./setup.sh --only 75` builds the image from
 `holmes-bridge/` on the minikube node (`minikube image build`), so no Go
 toolchain is needed locally. The tag is a hash of the source tree: edit the Go
@@ -118,29 +148,51 @@ code, re-run step 75, and only then is a new image built and rolled out. See
 The point of the demo is running *your* frontend against the stock backend.
 
 ```bash
-# .env
+# .env - the baseline the cluster comes up with (and rolls back to)
 FRONTEND_IMAGE_REPO=ghcr.io/ludvigsegerholmop/frontend
-FRONTEND_IMAGE_TAG=latest
+FRONTEND_IMAGE_TAG=sha-8cfa654
 ```
 
 Then `./setup.sh --only 60`.
 
-For a one-off release without editing `.env`, pass the image on the command
-line; these variables win over `.env` for that run:
+### Rolling out a release
+
+`deploy-frontend.sh` is the "ship a change, watch the agent" lever. It runs
+step 60 with the image overridden, so the pull check, pull secret and
+post-renderer are the same as a fresh install, and nothing is written to
+`.env`:
 
 ```bash
-# deploy a candidate frontend
-FRONTEND_IMAGE_REPO=ghcr.io/ludvigsegerholmop/frontend FRONTEND_IMAGE_TAG=latest ./setup.sh --only 60
-
-# roll back to whatever .env says
-./setup.sh --only 60
+./deploy-frontend.sh --list          # tags on FRONTEND_IMAGE_REPO (ghcr.io)
+./deploy-frontend.sh --status        # what the cluster is running now
+./deploy-frontend.sh sha-3a75a95     # roll a tag of FRONTEND_IMAGE_REPO out
+./deploy-frontend.sh ghcr.io/someone/frontend:v2   # or any repo:tag
+./deploy-frontend.sh --rollback      # back to what .env says
 ```
 
-A private `ghcr.io` package is fine: when `FRONTEND_IMAGE_REPO` is on
-`ghcr.io` and `GITHUB_PAT` is set, step 60 creates the docker-registry secret
+The [frontend repo](https://github.com/LudvigSegerholmOP/frontend)'s CI
+pushes `ghcr.io/ludvigsegerholmop/frontend:{latest,main,sha-<short>}` for
+every commit on `main`, so a release is `./deploy-frontend.sh sha-<short>`.
+`sha-8cfa654` is the stock frontend; `sha-3a75a95` ("related products and
+bundle recommendations") is the regression that fans out ~40 catalog RPCs per
+page.
+
+### Private ghcr.io packages
+
+A private `ghcr.io` package is fine, with one catch: ghcr.io only accepts
+**classic** PATs with `read:packages`; fine-grained tokens are rejected
+whatever their permissions, so the fine-grained `GITHUB_PAT` the GitHub MCP
+wants cannot double as the pull credential. Set `GHCR_PAT` to a classic token
+(it defaults to `GITHUB_PAT`, which is right when that is classic), or make
+the package public and leave both empty. When `FRONTEND_IMAGE_REPO` is on
+`ghcr.io` and `GHCR_PAT` is set, step 60 creates the docker-registry secret
 `microservices-demo/ghcr-pull` from it and the post-renderer attaches it as an
-`imagePullSecret` on the frontend Deployment only. Without a PAT the package
-must be public, or the pull fails with `unauthorized`.
+`imagePullSecret` on the frontend Deployment only.
+
+Preflight and step 60 fetch the image manifest from this machine with the
+same credentials before touching the cluster, so a token or visibility
+problem fails in a second with a hint rather than as `ImagePullBackOff`
+after the 15 minute Helm wait.
 On Apple Silicon a multi-arch image runs natively while the stock amd64-only
 services run under emulation.
 
@@ -208,7 +260,8 @@ file's hash is on the pod template.
 
 ```
 setup.sh                  entrypoint: --list / --only NN / --from NN
-teardown.sh
+teardown.sh               backs up the chat volumes to backups/, then deletes the cluster
+backup.sh                 snapshot (or --restore) the Open WebUI + holmes-bridge volumes
 lib/versions.sh           every pinned version and in-cluster URL
 lib/common.sh             logging, waits, kubectl/helm bound to the profile
 scripts/00-preflight      tool checks, .env, Helm repos, DOCKER_CONFIG shim
@@ -229,6 +282,7 @@ manifests/online-boutique/  locustfile.py, Linkerd ServiceProfiles
 manifests/grafana/        the release impact dashboard
 manifests/ingress/        Ingress rules for shop., grafana., chat.<domain>
 certs/                    generated Linkerd CA (gitignored)
+backups/                  chat volumes saved by teardown.sh / backup.sh (gitignored)
 ```
 
 Steps are independent and idempotent. Re-running `./setup.sh` is safe; each
